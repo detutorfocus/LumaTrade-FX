@@ -1,31 +1,21 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-/* Added Globe and ShieldCheck to resolve missing name errors on lines 241 and 244 */
-import { Send, Bot, User, Loader2, Sparkles, RotateCcw, RefreshCw, Target, ShieldAlert, Zap, TrendingUp, Info, ChevronDown, ChevronUp, AlertCircle, Globe, ShieldCheck } from 'lucide-react';
+import { 
+  Send, Bot, User, Loader2, RotateCcw, RefreshCw, 
+  Target, ShieldAlert, Zap, TrendingUp, ChevronDown, 
+  ChevronUp, AlertCircle, Globe, ShieldCheck, Waves,
+  Cpu, Database, Search, FileText, Shield
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { getGeminiResponse } from '../services/geminiService';
 import { ChatMessage } from '../types';
-
-interface AlexAnalysis {
-  action: 'WAIT' | 'PREPARE' | 'ENTER' | 'AVOID' | 'NEED_DATA';
-  confidence: number;
-  explanation: string;
-  what_to_watch?: string[];
-  technical_analysis: {
-    market_context: string;
-    zones: string;
-    liquidity: string;
-    confirmation: string;
-    signal?: string;
-    risk?: string;
-    next_actions?: string;
-  };
-  limits?: string[];
-}
+import { apiClient } from '../api/client';
+import { MarketData } from '../api/types';
 
 interface InternalMessage extends ChatMessage {
   isError?: boolean;
-  analysis?: AlexAnalysis;
+  linkedSymbol?: string;
+  isVerified?: boolean;
 }
 
 const ChatScreen: React.FC = () => {
@@ -34,13 +24,14 @@ const ChatScreen: React.FC = () => {
     {
       id: 'welcome',
       role: 'assistant',
-      content: "Neural Uplink Established. I am Alex, your Sniper Entry specialist. Provide a symbol and timeframe (e.g., 'Analyze XAUUSD on H1') to begin market interrogation.",
-      timestamp: new Date()
+      content: "Neural Uplink Established. Alex Core v3 active.\n\nSIGNAL: STANDBY\nBIAS: NEUTRAL\nCONFIDENCE: 100%\nEXPLANATION: Mention a symbol (e.g., 'Analyze XAUUSD') to begin data-grounded interrogation.",
+      timestamp: new Date(),
+      isVerified: true
     }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [expandedDetails, setExpandedDetails] = useState<Record<string, boolean>>({});
+  const [isSyncingData, setIsSyncingData] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -50,52 +41,92 @@ const ChatScreen: React.FC = () => {
         behavior: 'smooth'
       });
     }
-  }, [messages, isLoading]);
+  }, [messages, isLoading, isSyncingData]);
 
-  const toggleDetails = (id: string) => {
-    setExpandedDetails(prev => ({ ...prev, [id]: !prev[id] }));
+  const fetchMarketContext = async (symbol: string, timeframe: string = '1H') => {
+    try {
+      const [liveRes, historyRes] = await Promise.all([
+        apiClient.get<MarketData[]>('/api/mt5/market/live/'),
+        apiClient.get(`/api/mt5/market/history?symbol=${symbol}&timeframe=${timeframe}`)
+      ]);
+
+      const livePrice = liveRes.data.find(m => m.symbol === symbol.toUpperCase());
+      const history = (historyRes.data || []).slice(-25); // Increased for better context
+
+      if (!livePrice) return null;
+
+      // Providing structured JSON-like text helps Gemini's reasoning engine
+      return `
+PRIMARY_DATASET:
+SYMBOL: ${symbol.toUpperCase()}
+CURRENT_TIME: ${new Date().toISOString()}
+LIVE_BID: ${livePrice.bid}
+LIVE_ASK: ${livePrice.ask}
+TIMEFRAME: ${timeframe}
+
+HISTORICAL_CANDLES_OHLC:
+${history.map((c: any) => `[T:${c.time} O:${c.open} H:${c.high} L:${c.low} C:${c.close}]`).join('\n')}
+      `.trim();
+    } catch (err) {
+      console.error("Market context retrieval failed:", err);
+      return null;
+    }
+  };
+
+  const detectSymbolAndTimeframe = (text: string) => {
+    const symbolRegex = /\b(XAUUSD|EURUSD|BTCUSD|GBPUSD|USDJPY|NAS100|SPX500|AUDUSD|USDCAD|ETHUSD)\b/i;
+    const tfRegex = /\b(1m|5m|15m|30m|1H|4H|1D)\b/i;
+    
+    const symbolMatch = text.match(symbolRegex);
+    const tfMatch = text.match(tfRegex);
+    
+    return {
+      symbol: symbolMatch ? symbolMatch[0].toUpperCase() : null,
+      timeframe: tfMatch ? tfMatch[0] : '1H'
+    };
   };
 
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || isLoading) return;
 
+    const { symbol, timeframe } = detectSymbolAndTimeframe(text);
+    
     const userMsg: InternalMessage = {
       id: Date.now().toString(),
       role: 'user',
       content: text,
-      timestamp: new Date()
+      timestamp: new Date(),
+      linkedSymbol: symbol || undefined
     };
 
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setIsLoading(true);
 
+    let marketContext = '';
+    if (symbol) {
+      setIsSyncingData(true);
+      const contextData = await fetchMarketContext(symbol, timeframe);
+      if (contextData) {
+        marketContext = contextData;
+      }
+      setIsSyncingData(false);
+    }
+
     try {
       const geminiHistory = messages.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user' as 'model' | 'user',
-        parts: [{ text: m.role === 'assistant' && m.analysis ? JSON.stringify(m.analysis) : m.content }]
+        parts: [{ text: m.content }]
       }));
 
-      const responseText = await getGeminiResponse(text, geminiHistory);
+      const responseText = await getGeminiResponse(text, geminiHistory, marketContext);
       
-      let analysis: AlexAnalysis | undefined;
-      let displayContent = responseText || '';
-
-      try {
-        if (responseText) {
-          analysis = JSON.parse(responseText);
-          displayContent = analysis?.explanation || responseText;
-        }
-      } catch (e) {
-        console.warn("Response was not JSON:", responseText);
-      }
-
       const assistantMsg: InternalMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: displayContent,
-        analysis: analysis,
-        timestamp: new Date()
+        content: responseText || "Analysis Engine silent. Verify connection.",
+        timestamp: new Date(),
+        isVerified: !!marketContext
       };
 
       setMessages(prev => [...prev, assistantMsg]);
@@ -105,7 +136,7 @@ const ChatScreen: React.FC = () => {
       const errorMsg: InternalMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: "Critical failure in intelligence uplink. Please verify connection protocols.",
+        content: "SIGNAL: ERROR\nBIAS: UNKNOWN\nEXPLANATION: Critical failure in intelligence uplink. Please verify connection protocols.",
         timestamp: new Date(),
         isError: true
       };
@@ -113,6 +144,7 @@ const ChatScreen: React.FC = () => {
       setMessages(prev => [...prev, errorMsg]);
     } finally {
       setIsLoading(false);
+      setIsSyncingData(false);
     }
   };
 
@@ -129,18 +161,27 @@ const ChatScreen: React.FC = () => {
   const clearHistory = () => {
     if (confirm("Execute history purge?")) {
       setMessages([messages[0]]);
-      setExpandedDetails({});
     }
   };
 
-  const getActionColor = (action: string) => {
-    switch (action) {
-      case 'ENTER': return 'bg-emerald-500 text-white';
-      case 'PREPARE': return 'bg-blue-500 text-white';
-      case 'WAIT': return 'bg-amber-500 text-white';
-      case 'AVOID': return 'bg-rose-500 text-white';
-      default: return 'bg-slate-700 text-white';
-    }
+  const formatReport = (content: string) => {
+    const sections = ['SIGNAL:', 'BIAS:', 'ENTRY IDEA:', 'RISK:', 'CONFIDENCE:', 'EXPLANATION:'];
+    let formattedContent = content;
+
+    sections.forEach(header => {
+      const regex = new RegExp(`(${header})`, 'g');
+      formattedContent = formattedContent.replace(regex, `<span class="font-black text-blue-400 block mt-3 mb-1 tracking-widest text-[10px] uppercase underline decoration-blue-500/20 underline-offset-4">$1</span>`);
+    });
+
+    return formattedContent;
+  };
+
+  const getSignalStatusColor = (content: string) => {
+    if (content.includes('SIGNAL: BUY') || content.includes('SIGNAL: ENTER')) return 'border-l-emerald-500 bg-emerald-500/5';
+    if (content.includes('SIGNAL: SELL')) return 'border-l-rose-500 bg-rose-500/5';
+    if (content.includes('SIGNAL: WAIT') || content.includes('SIGNAL: PREPARE')) return 'border-l-amber-500 bg-amber-500/5';
+    if (content.includes('SIGNAL: AVOID') || content.includes('SIGNAL: ERROR')) return 'border-l-slate-700 bg-slate-900/50';
+    return 'border-l-blue-500 bg-slate-900/40';
   };
 
   return (
@@ -153,7 +194,7 @@ const ChatScreen: React.FC = () => {
           </div>
           <div className="flex flex-col">
             <span className="text-[10px] font-black text-white uppercase tracking-[0.2em]">Alex Core v3</span>
-            <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest leading-none">Sniper Entry Intelligence</span>
+            <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest leading-none">Grounded Intelligence</span>
           </div>
         </div>
         <button 
@@ -176,138 +217,65 @@ const ChatScreen: React.FC = () => {
                     ? 'bg-rose-500/20 border-rose-500/30 text-rose-500' 
                     : 'bg-slate-900 border-slate-800 text-blue-500 shadow-lg'
               }`}>
-                {msg.role === 'user' ? <User size={16} /> : <Bot size={16} />}
+                {msg.role === 'user' ? <User size={16} /> : <FileText size={16} />}
               </div>
               
               <div className="flex flex-col gap-2 flex-1">
-                {msg.analysis ? (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300">
-                    {/* Action Header */}
-                    <div className={`px-4 py-2 flex justify-between items-center ${getActionColor(msg.analysis.action)}`}>
-                       <div className="flex items-center gap-2">
-                         <Zap size={14} fill="currentColor" />
-                         <span className="text-[11px] font-black uppercase tracking-wider">{msg.analysis.action}</span>
-                       </div>
-                       <div className="flex items-center gap-1.5">
-                         <span className="text-[10px] font-black uppercase tracking-tighter">{msg.analysis.confidence}% Conviction</span>
-                       </div>
+                <div className={`px-4 py-3 rounded-2xl text-[13px] leading-relaxed font-medium shadow-sm border-l-2 ${
+                  msg.role === 'user' 
+                    ? 'bg-blue-600 text-white border-l-white/20 rounded-tr-none' 
+                    : getSignalStatusColor(msg.content) + ' border border-slate-800/40 rounded-tl-none text-slate-200'
+                }`}>
+                  {msg.role === 'assistant' ? (
+                    <div 
+                      className="report-content"
+                      dangerouslySetInnerHTML={{ __html: formatReport(msg.content) }}
+                    />
+                  ) : (
+                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                  )}
+                  
+                  {msg.isError && (
+                    <button onClick={retryLastMessage} className="mt-3 flex items-center gap-1.5 text-[10px] font-black uppercase text-rose-400">
+                      <RefreshCw size={12} /> Retry
+                    </button>
+                  )}
+                </div>
+                
+                <div className={`flex items-center gap-2 mt-1 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {msg.isVerified && (
+                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[7px] font-black text-emerald-500 uppercase">
+                      <Shield size={8} /> Data Grounded
                     </div>
-
-                    {/* Content Section */}
-                    <div className="p-4 space-y-4">
-                      {/* Confidence Bar */}
-                      <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)] transition-all duration-1000 ease-out"
-                          style={{ width: `${msg.analysis.confidence}%` }}
-                        />
-                      </div>
-
-                      <p className="text-[13px] leading-relaxed text-slate-200 font-medium italic">
-                        "{msg.analysis.explanation}"
-                      </p>
-
-                      {/* Watch Bullets */}
-                      {msg.analysis.what_to_watch && msg.analysis.what_to_watch.length > 0 && (
-                        <div className="bg-slate-950/50 rounded-xl p-3 border border-slate-800/50">
-                           <h5 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
-                             <Target size={10} className="text-blue-500" /> Key Observation Windows
-                           </h5>
-                           <ul className="space-y-1.5">
-                             {msg.analysis.what_to_watch.map((item, idx) => (
-                               <li key={idx} className="text-[11px] text-slate-400 flex gap-2">
-                                 <span className="text-blue-500 font-black">•</span> {item}
-                               </li>
-                             ))}
-                           </ul>
-                        </div>
-                      )}
-
-                      {/* Technical Toggle */}
-                      <button 
-                        onClick={() => toggleDetails(msg.id)}
-                        className="w-full py-2 bg-slate-800/50 hover:bg-slate-800 rounded-lg flex items-center justify-center gap-2 transition-all"
-                      >
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                          {expandedDetails[msg.id] ? 'Minimize Technicals' : 'View Sniper Breakdown'}
-                        </span>
-                        {expandedDetails[msg.id] ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                      </button>
-
-                      {/* Technical Details */}
-                      {expandedDetails[msg.id] && (
-                        <div className="space-y-3 pt-2 animate-in slide-in-from-top-2 duration-300">
-                          <div className="grid grid-cols-1 gap-3">
-                             {[
-                               { label: 'Market Context', val: msg.analysis.technical_analysis.market_context, icon: Globe },
-                               { label: 'Zones Identified', val: msg.analysis.technical_analysis.zones, icon: Target },
-                               { label: 'Liquidity Analysis', val: msg.analysis.technical_analysis.liquidity, icon: Waves },
-                               { label: 'Confirmation Protocol', val: msg.analysis.technical_analysis.confirmation, icon: ShieldCheck },
-                               { label: 'Tactical Signal', val: msg.analysis.technical_analysis.signal, icon: TrendingUp, color: 'text-blue-400' },
-                               { label: 'Risk Protection', val: msg.analysis.technical_analysis.risk, icon: ShieldAlert, color: 'text-rose-400' },
-                             ].map((tech, idx) => tech.val ? (
-                               <div key={idx} className="border-l-2 border-slate-800 pl-3 py-1">
-                                 <div className="flex items-center gap-1.5 mb-1">
-                                   <tech.icon size={10} className={tech.color || 'text-slate-500'} />
-                                   <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{tech.label}</span>
-                                 </div>
-                                 <p className="text-[11px] text-slate-300 font-medium leading-tight">{tech.val}</p>
-                               </div>
-                             ) : null)}
-                          </div>
-                          
-                          {msg.analysis.limits && (
-                            <div className="pt-2">
-                               <div className="flex items-center gap-1.5 mb-2">
-                                 <AlertCircle size={10} className="text-amber-500" />
-                                 <span className="text-[8px] font-black text-amber-500/70 uppercase tracking-widest">Constraints & Limits</span>
-                               </div>
-                               <ul className="space-y-1">
-                                 {msg.analysis.limits.map((l, i) => (
-                                   <li key={i} className="text-[10px] text-slate-500 italic">• {l}</li>
-                                 ))}
-                               </ul>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                  )}
+                  {msg.linkedSymbol && (
+                    <div className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-900 border border-slate-800 rounded text-[7px] font-black text-blue-500 uppercase">
+                      <Database size={8} /> Source: {msg.linkedSymbol}
                     </div>
+                  )}
+                  <div className="text-[8px] font-bold opacity-30 uppercase tracking-tighter">
+                    {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>
-                ) : (
-                  <div className={`px-4 py-3 rounded-2xl text-[13px] leading-relaxed font-medium shadow-sm whitespace-pre-wrap ${
-                    msg.role === 'user' 
-                      ? 'bg-blue-600 text-white rounded-tr-none' 
-                      : msg.isError
-                        ? 'bg-rose-500/10 border border-rose-500/20 text-rose-200 rounded-tl-none'
-                        : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none'
-                  }`}>
-                    {msg.content}
-                    {msg.isError && (
-                      <button onClick={retryLastMessage} className="mt-3 flex items-center gap-1.5 text-[10px] font-black uppercase text-rose-400">
-                        <RefreshCw size={12} /> Retry
-                      </button>
-                    )}
-                  </div>
-                )}
-                <div className={`text-[8px] font-bold opacity-30 uppercase tracking-tighter ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
-                  {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </div>
               </div>
             </div>
           </div>
         ))}
-        {isLoading && (
+        {(isLoading || isSyncingData) && (
           <div className="flex justify-start">
             <div className="flex gap-3">
               <div className="w-8 h-8 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center shadow-lg">
                 <Loader2 size={16} className="text-blue-500 animate-spin" />
               </div>
-              <div className="bg-slate-900/50 border border-slate-800 rounded-2xl rounded-tl-none px-4 py-3">
+              <div className="bg-slate-900/50 border border-slate-800 rounded-2xl rounded-tl-none px-4 py-3 flex flex-col gap-2">
                 <div className="flex gap-1">
                   <div className="w-1.5 h-1.5 bg-blue-500/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                   <div className="w-1.5 h-1.5 bg-blue-500/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                   <div className="w-1.5 h-1.5 bg-blue-500/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                 </div>
+                <span className="text-[8px] font-black text-blue-400 uppercase tracking-widest animate-pulse">
+                  {isSyncingData ? 'Syncing Liquidity Nodes...' : 'Anti-Hallucination Check Active...'}
+                </span>
               </div>
             </div>
           </div>
@@ -336,12 +304,5 @@ const ChatScreen: React.FC = () => {
     </div>
   );
 };
-
-// Mock icon for waves/liquidity
-const Waves = ({ size, className }: { size: number, className: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
-  </svg>
-);
 
 export default ChatScreen;

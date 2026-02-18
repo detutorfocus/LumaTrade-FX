@@ -1,8 +1,9 @@
 
 import React from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, TrendingUp, ShieldCheck, Settings, Bell, Menu, ShieldAlert, Cpu, CheckCircle2 } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Newspaper, TrendingUp, Settings, Bell, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { LumaIcon } from './Branding';
 
 const Layout: React.FC = () => {
   const { user, accountMode, setAccountMode } = useAuth();
@@ -11,8 +12,8 @@ const Layout: React.FC = () => {
   const navItems = [
     { icon: LayoutDashboard, path: '/', label: 'Home' },
     { icon: MessageSquare, path: '/chat', label: 'AI' },
+    { icon: Newspaper, path: '/news', label: 'News' },
     { icon: TrendingUp, path: '/trades', label: 'Trades' },
-    { icon: ShieldCheck, path: '/audit', label: 'Logs' },
     { icon: Settings, path: '/settings', label: 'Tools' },
   ];
 
@@ -28,11 +29,9 @@ const Layout: React.FC = () => {
       {/* Persistent Header */}
       <header className="sticky top-0 z-40 glass border-b border-slate-800/50 px-4 py-3 flex justify-between items-center h-16 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl flex items-center justify-center font-extrabold text-white shadow-lg shadow-blue-500/20">
-            L
-          </div>
+          <LumaIcon size={36} />
           <div className="flex flex-col">
-            <h1 className="text-sm font-black tracking-tighter uppercase leading-none">LumaTrade</h1>
+            <h1 className="text-sm font-black tracking-tighter uppercase leading-none text-white">LumaTrade</h1>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span className="text-[10px] text-blue-400 font-bold uppercase tracking-widest">{getPageTitle()}</span>
               <div className="w-1 h-1 bg-slate-700 rounded-full"></div>
@@ -84,12 +83,12 @@ const Layout: React.FC = () => {
         </div>
       </header>
 
-      {/* Page Content - Enabled momentum scrolling */}
+      {/* Page Content */}
       <main className="flex-1 overflow-y-auto pb-24 relative outline-none scroll-smooth">
         <Outlet />
       </main>
 
-      {/* Bottom Navigation (Mobile Native Feel) */}
+      {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 glass border-t border-slate-800/50 px-6 pt-2 pb-8 flex justify-between items-center z-50 h-24 shrink-0 safe-bottom">
         {navItems.map((item) => (
           <NavLink

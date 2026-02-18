@@ -12,7 +12,8 @@ import {
   ShieldAlert, Crosshair, Move, Cpu, TrendingDown,
   ChevronRight, Sparkles, Bot, BrainCircuit, Waves, ShieldCheck,
   Quote, Plus, Layers, BarChart4, Gauge,
-  ArrowUp, ArrowDown, Minus, Trash2
+  ArrowUp, ArrowDown, Minus, Trash2, Calendar,
+  Ban, ShieldX, Wallet
 } from 'lucide-react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { apiClient } from '../api/client';
@@ -62,6 +63,7 @@ interface PendingTrade {
   tp: string;
   sl: string;
   volume: number;
+  timeframe: string;
 }
 
 const ChartScreen: React.FC = () => {
@@ -122,9 +124,23 @@ const ChartScreen: React.FC = () => {
     refetchInterval: 3000
   });
 
+  const { data: pendingOrders } = useQuery<MT5Order[]>({
+    queryKey: ['orders-live', accountMode],
+    queryFn: async () => {
+      const res = await apiClient.get('/api/mt5/live/orders/');
+      return res.data;
+    },
+    refetchInterval: 5000
+  });
+
   const symbolOngoingTrade = useMemo(() => 
     activePositions?.find(pos => pos.symbol === currentSymbol),
     [activePositions, currentSymbol]
+  );
+
+  const symbolPendingOrder = useMemo(() => 
+    pendingOrders?.find(ord => ord.symbol === currentSymbol),
+    [pendingOrders, currentSymbol]
   );
 
   const activeSymbolData = useMemo(() => 
@@ -135,7 +151,7 @@ const ChartScreen: React.FC = () => {
   const currentPrice = activeSymbolData ? (activeSymbolData.bid + activeSymbolData.ask) / 2 : null;
 
   const tradeMutation = useMutation({
-    mutationFn: async ({ orderType, price, isAuto, tp, sl, volume }: { orderType: 'BUY' | 'SELL', price: number, isAuto?: boolean, tp?: string, sl?: string, volume: number }) => {
+    mutationFn: async ({ orderType, price, isAuto, tp, sl, volume, tf }: { orderType: 'BUY' | 'SELL', price: number, isAuto?: boolean, tp?: string, sl?: string, volume: number, tf: string }) => {
       await new Promise(resolve => setTimeout(resolve, 600));
       const response = await apiClient.post('/api/mt5/trade/execute', {
         symbol: currentSymbol,
@@ -145,7 +161,8 @@ const ChartScreen: React.FC = () => {
         mode: isAuto ? 'autonomous' : 'manual',
         take_profit: tp ? parseFloat(tp) : null,
         stop_loss: sl ? parseFloat(sl) : null,
-        account_mode: accountMode
+        account_mode: accountMode,
+        execution_timeframe: tf
       });
       return response.data;
     },
@@ -156,17 +173,29 @@ const ChartScreen: React.FC = () => {
       setFeedback({ 
         type: 'success', 
         message: msg + modeSuffix, 
-        detail: `Ticket #${data.ticket} at ${priceText} (${variables.volume} Lots)` 
+        detail: `Ticket #${data.ticket} at ${priceText} (${variables.volume} Lots) [${variables.tf}]` 
       });
       setTakeProfit('');
       setStopLoss('');
       queryClient.invalidateQueries({ queryKey: ['trades-live'] });
       queryClient.invalidateQueries({ queryKey: ['positions-live'] });
+      queryClient.invalidateQueries({ queryKey: ['orders-live'] });
       setTimeout(() => setFeedback(null), 4000);
     },
     onError: () => {
       setFeedback({ type: 'error', message: 'Execution Failed', detail: 'Terminal connectivity issue' });
       setTimeout(() => setFeedback(null), 4000);
+    }
+  });
+
+  const cancelOrderMutation = useMutation({
+    mutationFn: async (ticket: number) => {
+      return apiClient.post('/api/mt5/live/cancel/', { ticket });
+    },
+    onSuccess: () => {
+      setFeedback({ type: 'success', message: 'Order Cancelled', detail: 'Pending order removed from queue.' });
+      queryClient.invalidateQueries({ queryKey: ['orders-live'] });
+      setTimeout(() => setFeedback(null), 3000);
     }
   });
 
@@ -231,7 +260,6 @@ const ChartScreen: React.FC = () => {
           bottom: 0.1,
         },
       },
-      // Enhanced Interactivity Settings
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: analysisMode === 'pan',
@@ -257,10 +285,8 @@ const ChartScreen: React.FC = () => {
     mainSeriesRef.current = mainSeries;
     chartRef.current = chart;
 
-    // Interaction Subscriptions
     const handleMouseDown = (param: any) => {
       if (analysisMode !== 'range' || !param.time || !param.point || !mainSeriesRef.current) return;
-      
       isDraggingRef.current = true;
       const price = mainSeriesRef.current.coordinateToPrice(param.point.y);
       setSelection({
@@ -273,7 +299,6 @@ const ChartScreen: React.FC = () => {
 
     const handleMouseMove = (param: any) => {
       if (analysisMode !== 'range' || !isDraggingRef.current || !param.time || !param.point || !mainSeriesRef.current) return;
-      
       const price = mainSeriesRef.current.coordinateToPrice(param.point.y);
       setSelection(prev => ({
         ...prev,
@@ -286,7 +311,7 @@ const ChartScreen: React.FC = () => {
       isDraggingRef.current = false;
     };
 
-    chart.subscribeClick(handleMouseDown); // Use click as anchor for period analysis on mobile-first
+    chart.subscribeClick(handleMouseDown);
     chart.subscribeCrosshairMove(handleMouseMove);
 
     const resizeObserver = new ResizeObserver(entries => {
@@ -320,12 +345,9 @@ const ChartScreen: React.FC = () => {
     };
   }, [currentSymbol, timeframe, chartHistory, analysisMode]);
 
-  // Synchronize Selection Markers
   useEffect(() => {
     if (!mainSeriesRef.current || !selection.start) return;
-
     const markers: SeriesMarker<Time>[] = [];
-    
     if (selection.start) {
       markers.push({
         time: selection.start as Time,
@@ -335,7 +357,6 @@ const ChartScreen: React.FC = () => {
         text: 'START',
       });
     }
-
     if (selection.end && selection.end !== selection.start) {
       markers.push({
         time: selection.end as Time,
@@ -345,8 +366,6 @@ const ChartScreen: React.FC = () => {
         text: 'END',
       });
     }
-
-    // Fix: Cast current series to any to resolve missing setMarkers type property if inferred type is incomplete
     if (mainSeriesRef.current) {
       (mainSeriesRef.current as any).setMarkers(markers);
     }
@@ -356,8 +375,7 @@ const ChartScreen: React.FC = () => {
     if (!selection.start || !selection.end || !selection.startPrice || !selection.endPrice) return null;
     const diff = selection.endPrice - selection.startPrice;
     const pct = (diff / selection.startPrice) * 100;
-    const bars = Math.abs((selection.end as number) - (selection.start as number)) / 300; // approximate
-    return { diff, pct, bars };
+    return { diff, pct };
   }, [selection]);
 
   const handleTrade = (orderType: 'BUY' | 'SELL', isAuto: boolean = false, tp?: string, sl?: string) => {
@@ -375,11 +393,12 @@ const ChartScreen: React.FC = () => {
         price: currentPrice,
         tp: finalTp,
         sl: finalSl,
-        volume: lotSize
+        volume: lotSize,
+        timeframe: timeframe
       });
       setIsConfirmModalOpen(true);
     } else {
-      tradeMutation.mutate({ orderType, price: currentPrice, isAuto, tp: finalTp, sl: finalSl, volume: lotSize });
+      tradeMutation.mutate({ orderType, price: currentPrice, isAuto, tp: finalTp, sl: finalSl, volume: lotSize, tf: timeframe });
     }
   };
 
@@ -391,7 +410,8 @@ const ChartScreen: React.FC = () => {
       isAuto: false, 
       tp: pendingTrade.tp, 
       sl: pendingTrade.sl,
-      volume: pendingTrade.volume
+      volume: pendingTrade.volume,
+      tf: pendingTrade.timeframe
     });
     setIsConfirmModalOpen(false);
     setPendingTrade(null);
@@ -412,7 +432,7 @@ const ChartScreen: React.FC = () => {
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
-        contents: `Act as a Senior Quantitative Analyst. Provide a trade signal for ${currentSymbol} at ${currentPrice}. History: ${JSON.stringify(marketContext)}`,
+        contents: `Act as a Senior Quantitative Analyst. Provide a trade signal for ${currentSymbol} at ${currentPrice} based on the ${timeframe} timeframe. History: ${JSON.stringify(marketContext)}`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -497,13 +517,9 @@ const ChartScreen: React.FC = () => {
           <button onClick={() => navigate(-1)} className="w-10 h-10 flex items-center justify-center bg-slate-900 border border-slate-800 rounded-xl text-slate-400">
             <ArrowLeft size={20} />
           </button>
-          <div>
-            <div className="flex items-center gap-2 group cursor-pointer">
-              <h2 className="text-lg font-black text-white">{currentSymbol}</h2>
-              <div className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-900 border border-slate-800 rounded text-[9px] font-black text-blue-400 uppercase" onClick={() => setIsTimeframeOpen(!isTimeframeOpen)}>
-                {timeframe} <ChevronDown size={10} />
-              </div>
-            </div>
+          <div className="flex flex-col">
+            <h2 className="text-sm font-black text-white leading-none mb-1">{currentSymbol}</h2>
+            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{timeframe} INTERVAL</span>
           </div>
         </div>
         <div className="text-right">
@@ -542,7 +558,7 @@ const ChartScreen: React.FC = () => {
         <div className="absolute top-24 left-5 right-5 z-50 animate-in slide-in-from-top-4 fade-in duration-500">
           <div className={`relative bg-slate-900/95 border rounded-[2rem] overflow-hidden shadow-2xl backdrop-blur-2xl flex flex-col border-blue-500/40`}>
             <div className="bg-blue-600 px-5 py-3 flex justify-between items-center relative z-10 shrink-0">
-              <span className="text-[10px] font-black text-white uppercase tracking-[0.15em]">Neural Signal Engine</span>
+              <span className="text-[10px] font-black text-white uppercase tracking-[0.15em]">Neural Signal Engine [${timeframe}]</span>
               <div className="px-2.5 py-1 bg-white/20 rounded-full text-[9px] font-black text-white">{activeSignal.confidence.toFixed(1)}% Conviction</div>
             </div>
             <div className="p-6 space-y-4 relative z-10">
@@ -583,9 +599,6 @@ const ChartScreen: React.FC = () => {
                    </span>
                  </div>
                </div>
-               <div className="px-3 py-1 bg-slate-800 rounded-lg text-[9px] font-black text-slate-400 uppercase">
-                 Measuring Range
-               </div>
             </div>
           </div>
         )}
@@ -593,22 +606,136 @@ const ChartScreen: React.FC = () => {
 
       {/* Trade Controls */}
       <div className={`p-4 border-t border-slate-800/50 glass-dark shrink-0 pb-12 z-30`}>
+        {/* Timeframe Matrix */}
+        <div className="mb-4">
+          <div className="flex items-center gap-2 px-1 mb-2">
+            <Calendar size={12} className="text-blue-500" />
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Analysis Timeframe</span>
+          </div>
+          <div className="flex bg-slate-950/50 p-1 rounded-2xl border border-slate-800/30 gap-1 overflow-x-auto no-scrollbar">
+            {TIMEFRAMES.map(tf => (
+              <button
+                key={tf}
+                onClick={() => setTimeframe(tf)}
+                className={`flex-1 min-w-[50px] py-2.5 rounded-xl text-[10px] font-black transition-all ${
+                  timeframe === tf 
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' 
+                    : 'text-slate-600 hover:text-slate-400 hover:bg-slate-900'
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* TP/SL Input Section */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5 px-1">
+              <Target size={10} className="text-emerald-500" />
+              <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Take Profit</label>
+            </div>
+            <input 
+              type="number" step="any"
+              placeholder="0.00000"
+              className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-3 px-4 text-xs font-black text-white outline-none focus:ring-1 focus:ring-emerald-500/50 placeholder:text-slate-800 transition-all"
+              value={takeProfit}
+              onChange={(e) => setTakeProfit(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5 px-1">
+              <ShieldAlert size={10} className="text-rose-500" />
+              <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Stop Loss</label>
+            </div>
+            <input 
+              type="number" step="any"
+              placeholder="0.00000"
+              className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-3 px-4 text-xs font-black text-white outline-none focus:ring-1 focus:ring-rose-500/50 placeholder:text-slate-800 transition-all"
+              value={stopLoss}
+              onChange={(e) => setStopLoss(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Current Order/Position Status Display */}
+        {(symbolOngoingTrade || symbolPendingOrder) && (
+          <div className="mb-4 animate-in slide-in-from-bottom-2 fade-in duration-300">
+            <div className={`p-4 rounded-2xl border flex flex-col gap-3 backdrop-blur-md shadow-lg ${
+              symbolOngoingTrade 
+                ? 'bg-blue-600/5 border-blue-500/30' 
+                : 'bg-amber-600/5 border-amber-500/30'
+            }`}>
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${symbolOngoingTrade ? 'bg-blue-500' : 'bg-amber-500'}`} />
+                  <span className="text-[9px] font-black uppercase tracking-widest text-white">
+                    {symbolOngoingTrade ? 'Active Position' : 'Pending Order'}
+                  </span>
+                </div>
+                <button 
+                  onClick={() => symbolOngoingTrade ? closePositionMutation.mutate(symbolOngoingTrade.ticket) : cancelOrderMutation.mutate(symbolPendingOrder!.ticket)}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[9px] font-black uppercase transition-all shadow-md ${
+                    symbolOngoingTrade 
+                      ? 'bg-rose-600/20 text-rose-500 border border-rose-500/30 hover:bg-rose-600 hover:text-white' 
+                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-rose-900 hover:text-white'
+                  }`}
+                >
+                  <Ban size={10} /> {symbolOngoingTrade ? 'Liquidate' : 'Void Order'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2">
+                <div className="flex flex-col">
+                  <span className="text-[7px] font-black text-slate-500 uppercase">Side</span>
+                  <span className={`text-[10px] font-black ${
+                    (symbolOngoingTrade?.type || symbolPendingOrder?.type).includes('BUY') ? 'text-emerald-500' : 'text-rose-500'
+                  }`}>
+                    {symbolOngoingTrade?.type || symbolPendingOrder?.type}
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[7px] font-black text-slate-500 uppercase">Volume</span>
+                  <span className="text-[10px] font-black text-white font-mono">
+                    {symbolOngoingTrade?.volume || symbolPendingOrder?.volume} L
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[7px] font-black text-slate-500 uppercase">Entry</span>
+                  <span className="text-[10px] font-black text-white font-mono">
+                    {(symbolOngoingTrade?.open_price || symbolPendingOrder?.price)?.toFixed(5)}
+                  </span>
+                </div>
+                <div className="flex flex-col text-right">
+                  <span className="text-[7px] font-black text-slate-500 uppercase">Unrealized</span>
+                  <span className={`text-[10px] font-black font-mono ${
+                    (symbolOngoingTrade?.profit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}>
+                    {symbolOngoingTrade ? `${symbolOngoingTrade.profit >= 0 ? '+' : ''}${symbolOngoingTrade.profit.toFixed(2)}` : '---'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-between items-center mb-4 px-2">
           <button onClick={triggerAIAnalysis} disabled={isAnalyzing} className="flex items-center gap-2 group">
             {isAnalyzing ? <Loader2 size={12} className="text-blue-500 animate-spin" /> : <BrainCircuit size={12} className="text-blue-500" />}
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{isAnalyzing ? 'Uplinking...' : 'Quant AI'}</span>
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{isAnalyzing ? 'Processing...' : 'Deep Quant Analysis'}</span>
           </button>
           <div className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-900 border border-slate-800 rounded-full">
-             <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">{accountMode} • {lotSize.toFixed(2)} LOTS</span>
+             <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">{accountMode} • {lotSize.toFixed(2)} L</span>
           </div>
         </div>
         
         <div className="flex gap-4 mb-5">
           <button onClick={() => handleTrade('BUY')} disabled={tradeMutation.isPending} className="flex-1 h-16 rounded-[1.25rem] font-black bg-emerald-600 hover:bg-emerald-500 text-white flex flex-col items-center justify-center transition-all active:scale-[0.97] shadow-xl shadow-emerald-600/20">
-            {tradeMutation.isPending ? <Loader2 className="animate-spin" size={20} /> : <><span className="text-sm uppercase tracking-tighter">BUY</span><span className="text-[9px] font-mono">{currentPrice?.toFixed(5)}</span></>}
+            {tradeMutation.isPending ? <Loader2 className="animate-spin" size={20} /> : <><span className="text-sm uppercase tracking-tighter">BUY MARKET</span><span className="text-[9px] font-mono opacity-60">{currentPrice?.toFixed(5)}</span></>}
           </button>
           <button onClick={() => handleTrade('SELL')} disabled={tradeMutation.isPending} className="flex-1 h-16 rounded-[1.25rem] font-black bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center transition-all active:scale-[0.97] shadow-xl shadow-rose-600/20">
-            {tradeMutation.isPending ? <Loader2 className="animate-spin" size={20} /> : <><span className="text-sm uppercase tracking-tighter">SELL</span><span className="text-[9px] font-mono">{currentPrice?.toFixed(5)}</span></>}
+            {tradeMutation.isPending ? <Loader2 className="animate-spin" size={20} /> : <><span className="text-sm uppercase tracking-tighter">SELL MARKET</span><span className="text-[9px] font-mono opacity-60">{currentPrice?.toFixed(5)}</span></>}
           </button>
         </div>
 

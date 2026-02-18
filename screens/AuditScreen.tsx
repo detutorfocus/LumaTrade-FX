@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+
+import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { 
   ShieldCheck, 
@@ -21,19 +22,22 @@ const AuditScreen: React.FC = () => {
   const { data: activities, isLoading, refetch, isRefetching } = useQuery<SecurityActivity[]>({
     queryKey: ['security-activity', filterType],
     queryFn: async () => {
-      // Pass filter to API if query params are supported
       const params = new URLSearchParams();
       if (filterType) params.append('event_type', filterType);
-      
       const res = await apiClient.get(`/api/security/activity/?${params.toString()}`);
       return res.data;
     }
   });
 
-  const filteredLogs = activities?.filter(log => 
-    log.event_type.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    log.ip_address.includes(searchTerm)
-  );
+  const filteredLogs = useMemo(() => {
+    // Rigid defensive check against non-array responses
+    if (!Array.isArray(activities)) return [];
+    
+    return activities.filter(log => 
+      (log.event_type?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || 
+      (log.ip_address || '').includes(searchTerm)
+    );
+  }, [activities, searchTerm]);
 
   const verifyIntegrity = async () => {
     try {
@@ -56,7 +60,6 @@ const AuditScreen: React.FC = () => {
         </button>
       </div>
 
-      {/* Filter & Search Bar */}
       <div className="space-y-3">
         <div className="relative group">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 group-focus-within:text-blue-500 transition-colors" size={16} />
@@ -100,15 +103,15 @@ const AuditScreen: React.FC = () => {
                   ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' 
                   : 'bg-rose-500/10 border-rose-500/20 text-rose-500'
               }`}>
-                {log.event_type.includes('login') ? <Lock size={18} /> : <ShieldCheck size={18} />}
+                {log.event_type?.includes('login') ? <Lock size={18} /> : <ShieldCheck size={18} />}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex justify-between items-start mb-1">
                   <h4 className="text-[12px] font-bold text-white uppercase truncate pr-2">
-                    {log.event_type.replace(/_/g, ' ')}
+                    {log.event_type?.replace(/_/g, ' ') || 'SYSTEM EVENT'}
                   </h4>
                   <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${
-                    log.success ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
+                    log.success ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-400'
                   }`}>
                     {log.success ? 'Success' : 'Refused'}
                   </span>
@@ -128,7 +131,6 @@ const AuditScreen: React.FC = () => {
         </div>
       )}
 
-      {/* Terminal Integrity Verification */}
       <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-[2rem] p-6 shadow-xl border-t-blue-500/30">
         <div className="flex items-start gap-4 mb-4">
           <div className="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500 shrink-0">

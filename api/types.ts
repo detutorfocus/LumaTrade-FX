@@ -63,6 +63,17 @@ export interface MarketData {
   timestamp: string;
 }
 
+export interface NewsArticle {
+  id: string;
+  title: string;
+  summary: string;
+  source: string;
+  impact: 'HIGH' | 'MEDIUM' | 'LOW';
+  category: 'FOREX' | 'CRYPTO' | 'ECONOMY' | 'STOCKS';
+  published_at: string;
+  symbol_linked?: string;
+}
+
 export interface SecurityActivity {
   id: number;
   event_type: string;

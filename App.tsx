@@ -15,6 +15,8 @@ import AuditScreen from './screens/AuditScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import ChartScreen from './screens/ChartScreen';
+import NewsScreen from './screens/NewsScreen';
+import TermsScreen from './screens/TermsScreen';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -47,6 +49,7 @@ const App: React.FC = () => {
           <Routes>
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/register" element={<RegisterScreen />} />
+            <Route path="/terms" element={<TermsScreen />} />
             
             <Route path="/" element={
               <PrivateRoute>
@@ -55,6 +58,7 @@ const App: React.FC = () => {
             }>
               <Route index element={<DashboardScreen />} />
               <Route path="chat" element={<ChatScreen />} />
+              <Route path="news" element={<NewsScreen />} />
               <Route path="trades" element={<TradesScreen />} />
               <Route path="audit" element={<AuditScreen />} />
               <Route path="settings" element={<SettingsScreen />} />

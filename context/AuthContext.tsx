@@ -15,6 +15,10 @@ interface AuthContextType {
   setAiConfidenceThreshold: (threshold: number) => void;
   aiOrderTypePreference: 'MARKET' | 'LIMIT';
   setAiOrderTypePreference: (type: 'MARKET' | 'LIMIT') => void;
+  aiMaxPositions: number;
+  setAiMaxPositions: (count: number) => void;
+  aiSlippageTolerance: number;
+  setAiSlippageTolerance: (pips: number) => void;
   login: (data: LoginResponse & AuthTokenResponse) => void;
   logout: () => void;
   refreshUser: () => Promise<void>;
@@ -26,29 +30,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   
-  const [accountMode, setAccountModeState] = useState<AccountMode>(() => {
-    return (localStorage.getItem('account_mode') as AccountMode) || 'DEMO';
-  });
-
-  const [autoTradeEnabled, setAutoTradeEnabledState] = useState<boolean>(() => {
-    return localStorage.getItem('auto_trade_enabled') === 'true';
-  });
-
+  const [accountMode, setAccountModeState] = useState<AccountMode>(() => (localStorage.getItem('account_mode') as AccountMode) || 'DEMO');
+  const [autoTradeEnabled, setAutoTradeEnabledState] = useState<boolean>(() => localStorage.getItem('auto_trade_enabled') === 'true');
   const [aiConfidenceThreshold, setAiConfidenceThresholdState] = useState<number>(() => {
     const saved = localStorage.getItem('ai_confidence_threshold');
     return saved ? parseInt(saved, 10) : 92;
   });
-
-  const [aiOrderTypePreference, setAiOrderTypePreferenceState] = useState<'MARKET' | 'LIMIT'>(() => {
-    const saved = localStorage.getItem('ai_order_type_preference');
-    return (saved as 'MARKET' | 'LIMIT') || 'MARKET';
+  const [aiOrderTypePreference, setAiOrderTypePreferenceState] = useState<'MARKET' | 'LIMIT'>(() => (localStorage.getItem('ai_order_type_preference') as 'MARKET' | 'LIMIT') || 'MARKET');
+  
+  const [aiMaxPositions, setAiMaxPositionsState] = useState<number>(() => {
+    const saved = localStorage.getItem('ai_max_positions');
+    return saved ? parseInt(saved, 10) : 3;
+  });
+  
+  const [aiSlippageTolerance, setAiSlippageToleranceState] = useState<number>(() => {
+    const saved = localStorage.getItem('ai_slippage_tolerance');
+    return saved ? parseFloat(saved) : 2.5;
   });
 
   const setAccountMode = (mode: AccountMode) => {
-    if (mode === 'REAL' && !user?.mt5_linked) {
-      console.warn("Real mode requires MT5 link");
-      return;
-    }
     localStorage.setItem('account_mode', mode);
     setAccountModeState(mode);
   };
@@ -68,16 +68,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAiOrderTypePreferenceState(type);
   };
 
+  const setAiMaxPositions = (count: number) => {
+    localStorage.setItem('ai_max_positions', String(count));
+    setAiMaxPositionsState(count);
+  };
+
+  const setAiSlippageTolerance = (pips: number) => {
+    localStorage.setItem('ai_slippage_tolerance', String(pips));
+    setAiSlippageToleranceState(pips);
+  };
+
   const checkAuth = async () => {
     const token = localStorage.getItem('access_token');
-    const apiKey = localStorage.getItem('x_api_key');
-    
-    if (token || apiKey) {
+    if (token) {
       try {
         const res = await apiClient.get('/api/auth/user/');
         setUser(res.data);
       } catch (e) {
-        console.error("Auth verification failed", e);
         logout();
       }
     }
@@ -88,53 +95,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await apiClient.get('/api/auth/user/');
       setUser(res.data);
-    } catch (e) {
-      console.error("Failed to refresh user", e);
-    }
+    } catch (e) {}
   };
 
   useEffect(() => {
     checkAuth();
-    
-    const handleLogout = () => logout();
-    window.addEventListener('auth:logout', handleLogout);
-    return () => window.removeEventListener('auth:logout', handleLogout);
   }, []);
 
-  const login = (data: LoginResponse & AuthTokenResponse) => {
+  const login = (data: any) => {
     if (data.access) localStorage.setItem('access_token', data.access);
-    if (data.refresh) localStorage.setItem('refresh_token', data.refresh);
-    if (data.key) localStorage.setItem('x_api_key', data.key);
-    
     if (data.user) setUser(data.user);
-    else checkAuth();
+    else refreshUser();
   };
 
   const logout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('x_api_key');
-    localStorage.removeItem('account_mode');
+    localStorage.clear();
     setUser(null);
     setAccountModeState('DEMO');
   };
 
   return (
     <AuthContext.Provider value={{ 
-      user, 
-      isAuthenticated: !!user, 
-      isLoading,
-      accountMode,
-      setAccountMode,
-      autoTradeEnabled,
-      setAutoTradeEnabled,
-      aiConfidenceThreshold,
-      setAiConfidenceThreshold,
-      aiOrderTypePreference,
-      setAiOrderTypePreference,
-      login, 
-      logout,
-      refreshUser
+      user, isAuthenticated: !!user, isLoading, accountMode, setAccountMode,
+      autoTradeEnabled, setAutoTradeEnabled, aiConfidenceThreshold, setAiConfidenceThreshold,
+      aiOrderTypePreference, setAiOrderTypePreference, aiMaxPositions, setAiMaxPositions,
+      aiSlippageTolerance, setAiSlippageTolerance, login, logout, refreshUser
     }}>
       {children}
     </AuthContext.Provider>

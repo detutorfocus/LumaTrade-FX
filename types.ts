@@ -44,9 +44,11 @@ export enum AppRoute {
   LOGIN = '/login',
   DASHBOARD = '/',
   CHAT = '/chat',
+  NEWS = '/news',
   TRADES = '/trades',
   AUDIT = '/audit',
   SETTINGS = '/settings',
   PROFILE = '/profile',
-  CHART = '/chart/:symbol'
+  CHART = '/chart/:symbol',
+  TERMS = '/terms'
 }
