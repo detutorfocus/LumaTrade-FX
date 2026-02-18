@@ -1,0 +1,8 @@
+{
+  "name": "LumaTrade FX Mobile",
+  "description": "A high-performance, mobile-first Forex trading dashboard and AI assistant built with React, Tailwind, and Gemini API.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
